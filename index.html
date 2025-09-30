@@ -5,28 +5,226 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Phaser 3 Battle Royale - Online</title>
     <style>
-        body {
+        body, html {
             margin: 0;
             padding: 0;
             background-color: #000;
             overflow: hidden;
+            height: 100%;
+            font-family: 'Arial', sans-serif;
         }
         #game-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100vw;
             height: 100vh;
         }
         canvas {
             display: block;
         }
+
+        /* --- New Lobby CSS --- */
+        #lobby-ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: url('image_dbf9eb.png') no-repeat center center;
+            background-size: cover;
+            display: none; /* Initially hidden */
+            color: white;
+            z-index: 100;
+        }
+
+        .lobby-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .top-bar, .bottom-bar, .left-sidebar, .right-sidebar {
+            position: absolute;
+        }
+
+        .top-bar {
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .player-info {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 15px;
+            border-radius: 20px;
+            border: 1px solid #ffc107;
+        }
+
+        .currency-info {
+            display: flex;
+            gap: 20px;
+        }
+
+        .currency-item {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 15px;
+            border-radius: 5px;
+        }
+
+        .left-sidebar {
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .right-sidebar {
+            right: 15px;
+            bottom: 110px; /* Positioned above the start button */
+        }
+        
+        .sidebar-btn {
+            background: rgba(20, 20, 20, 0.7);
+            border: 1px solid #888;
+            color: #fff;
+            padding: 12px 20px;
+            width: 150px;
+            text-align: center;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .sidebar-btn:hover {
+             background: rgba(50, 50, 50, 0.9);
+        }
+
+        .bottom-bar {
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: flex-end; /* Aligns START button to the right */
+            padding: 0 20px;
+        }
+        
+        #start-button {
+            background-color: #ffc107;
+            color: #000;
+            border: none;
+            padding: 20px 60px;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+            text-transform: uppercase;
+        }
+        #start-button:hover {
+            background-color: #e0a800;
+        }
+
+        #name-prompt {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            padding: 30px;
+            border-radius: 10px;
+            border: 2px solid #ffc107;
+            text-align: center;
+            z-index: 101; /* Above the lobby */
+        }
+        #name-prompt h2 {
+            margin-top: 0;
+        }
+        #name-input {
+            font-size: 24px;
+            padding: 10px;
+            width: 300px;
+            border: 2px solid #fff;
+            background-color: #333;
+            color: #fff;
+            margin-bottom: 20px;
+        }
+        #submit-name-button {
+             background-color: #0f0;
+             color: #000;
+             border: none;
+             padding: 15px 40px;
+             font-size: 20px;
+             cursor: pointer;
+             border-radius: 5px;
+        }
+        #matchmaking-status {
+            display: none; /* Hidden until matchmaking starts */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 32px;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+        }
+
     </style>
 </head>
 <body>
-    <div id="game-container"></div>
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <div id="lobby-ui">
+        <div class="lobby-overlay">
+            <div class="top-bar">
+                <div id="player-name-display" class="player-info">PlayerName</div>
+                <div class="currency-info">
+                    <div class="currency-item">Gold: 750</div>
+                    <div class="currency-item">Gems: 4258</div>
+                </div>
+            </div>
 
+            <div class="left-sidebar">
+                <button class="sidebar-btn">Events</button>
+                <button class="sidebar-btn">Lucky Royale</button>
+                <button class="sidebar-btn">Booyah Pass</button>
+                <button class="sidebar-btn">Vault</button>
+                <button class="sidebar-btn">Weapon</button>
+            </div>
+
+            <div class="right-sidebar">
+                 <button class="sidebar-btn">BR-RANKED</button>
+            </div>
+
+            <div class="bottom-bar">
+                <button id="start-button">START</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="name-prompt">
+        <h2>Enter Your Name</h2>
+        <input type="text" id="name-input" placeholder="Your Name">
+        <br>
+        <button id="submit-name-button">Confirm</button>
+    </div>
+    
+    <div id="matchmaking-status">Starting Match...</div>
+
+    <div id="game-container"></div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 
@@ -47,7 +245,7 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        // --- LOBBY SCENE (NEW) ---
+        // --- LOBBY SCENE (MODIFIED FOR NEW UI) ---
         class LobbyScene extends Phaser.Scene {
             constructor() {
                 super({ key: 'LobbyScene' });
@@ -56,41 +254,51 @@
             }
 
             create() {
-                // Simple UI for username input
-                const nameInput = document.createElement('input');
-                nameInput.type = 'text';
-                nameInput.placeholder = 'Enter your name';
-                nameInput.style.position = 'absolute';
-                nameInput.style.top = '45%';
-                nameInput.style.left = '50%';
-                nameInput.style.transform = 'translate(-50%, -50%)';
-                nameInput.style.fontSize = '24px';
-                nameInput.style.padding = '10px';
-                nameInput.style.width = '300px';
-                nameInput.style.border = '2px solid #fff';
-                nameInput.style.backgroundColor = '#333';
-                nameInput.style.color = '#fff';
-                document.body.appendChild(nameInput);
+                // Hide canvas, show lobby
+                this.game.canvas.style.display = 'none';
+                const lobbyUI = document.getElementById('lobby-ui');
+                const namePrompt = document.getElementById('name-prompt');
+                const nameInput = document.getElementById('name-input');
+                const submitNameButton = document.getElementById('submit-name-button');
+                const startButton = document.getElementById('start-button');
+                const playerNameDisplay = document.getElementById('player-name-display');
+                const matchmakingStatus = document.getElementById('matchmaking-status');
+                
+                namePrompt.style.display = 'block';
+                lobbyUI.style.display = 'none';
+                matchmakingStatus.style.display = 'none';
 
-                const startButton = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY + 70, 'Start Matchmaking', {
-                    fontSize: '32px', fill: '#0f0', backgroundColor: '#333', padding: { x: 20, y: 10 }
-                }).setOrigin(0.5).setInteractive();
-
-                const statusText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY + 140, '', {
-                    fontSize: '20px', fill: '#fff'
-                }).setOrigin(0.5);
-
-                startButton.on('pointerdown', () => {
+                const onNameSubmit = () => {
                     const username = nameInput.value.trim();
                     if (!username) {
                         alert('Please enter a username!');
                         return;
                     }
+                    playerNameDisplay.textContent = username;
+                    namePrompt.style.display = 'none';
+                    lobbyUI.style.display = 'block';
+                };
 
-                    // Clean up UI
-                    nameInput.style.display = 'none';
-                    startButton.destroy();
-                    statusText.setText('Waiting for other players...');
+                submitNameButton.onclick = onNameSubmit;
+                nameInput.addEventListener('keyup', (event) => {
+                    if (event.key === 'Enter') {
+                        onNameSubmit();
+                    }
+                });
+
+
+                startButton.onclick = () => {
+                    const username = playerNameDisplay.textContent;
+                    if (!username || username === "PlayerName") {
+                        alert('Please set your name first!');
+                        namePrompt.style.display = 'block';
+                        lobbyUI.style.display = 'none';
+                        return;
+                    }
+
+                    // Show matchmaking status
+                    lobbyUI.style.display = 'none';
+                    matchmakingStatus.style.display = 'block';
 
                     // Generate a unique ID for the player
                     this.playerId = 'player_' + Math.random().toString(36).substr(2, 9);
@@ -106,15 +314,27 @@
                         const players = snapshot.val();
                         const playerCount = players ? Object.keys(players).length : 0;
 
-                        if (playerCount >= 2) {
-                            this.matchmakingRef.off('value'); // Stop listening
-                            this.startGame(players);
+                        // --- THIS IS THE FIX ---
+                        // Now starts if at least 1 player is in the queue
+                        if (playerCount >= 1) { 
+                            if(this.matchmakingRef) this.matchmakingRef.off('value'); // Stop listening
+                            // Use a small delay to ensure Firebase has the latest data before starting
+                            setTimeout(() => this.startGame(snapshot.val()), 100);
                         }
                     });
-                });
+                };
             }
 
             startGame(players) {
+                 if (!this.scene.isActive()) return; // Prevent starting game twice
+                
+                // Hide HTML UI and show canvas again
+                const lobbyUI = document.getElementById('lobby-ui');
+                const matchmakingStatus = document.getElementById('matchmaking-status');
+                lobbyUI.style.display = 'none';
+                matchmakingStatus.style.display = 'none';
+                this.game.canvas.style.display = 'block';
+
                 // Sort players by join time to consistently determine the host
                 const playerEntries = Object.entries(players);
                 playerEntries.sort((a, b) => a[1].joinedAt - b[1].joinedAt);
@@ -126,10 +346,10 @@
                 const isHost = this.playerId === hostId;
 
                 // Create a unique game ID
-                const gameId = 'game_' + Math.random().toString(36).substr(2, 9);
+                const gameId = 'game_' + Date.now() + Math.random().toString(36).substr(2, 5);
                 
                 // Host cleans up the matchmaking queue
-                if (isHost) {
+                if (isHost && this.matchmakingRef) {
                     this.matchmakingRef.remove();
                 }
 
@@ -143,7 +363,7 @@
             }
         }
 
-        // --- GAME SCENE (MODIFIED FOR MULTIPLAYER) ---
+        // --- GAME SCENE (UNCHANGED) ---
         class GameScene extends Phaser.Scene {
             constructor() {
                 super({ key: 'GameScene' });
@@ -155,14 +375,12 @@
                 this.zoneGraphics = null;
                 this.zoneTimer = null;
                 this.isGameOver = false;
-
-                // New properties for multiplayer
                 this.gameId = null;
                 this.playerId = null;
                 this.isHost = false;
                 this.playerRef = null;
                 this.gameRef = null;
-                this.remotePlayers = {}; // To store other players' sprites
+                this.remotePlayers = {};
             }
 
             init(data) {
@@ -170,10 +388,6 @@
                 this.playerId = data.playerId;
                 this.isHost = data.isHost;
                 this.initialPlayers = data.initialPlayers;
-            }
-
-            preload() {
-                // No external assets to load
             }
 
             create() {
@@ -203,7 +417,6 @@
                 this.bullets = this.physics.add.group({ classType: Bullet, runChildUpdate: true });
                 this.loot = this.physics.add.group();
 
-                // Create players from lobby data
                 Object.keys(this.initialPlayers).forEach(id => {
                     const pData = this.initialPlayers[id];
                     const isLocalPlayer = (id === this.playerId);
@@ -214,21 +427,24 @@
                     if (isLocalPlayer) {
                         this.player = player;
                         this.playerRef = this.gameRef.child('players').child(this.playerId);
+                        this.playerRef.set({x: player.x, y: player.y, rotation: player.rotation, health: player.health, armor: player.armor, username: player.playerName});
                         this.playerRef.onDisconnect().remove();
                     } else {
                         this.remotePlayers[id] = player;
                     }
                 });
 
-                // Host creates and manages bots
                 if (this.isHost) {
                     const realPlayerCount = Object.keys(this.initialPlayers).length;
                     const botsToCreate = Math.max(0, 10 - realPlayerCount);
                     for (let i = 0; i < botsToCreate; i++) {
-                        const botId = `bot_${i}`;
-                        const bot = new Player(this, Phaser.Math.Between(200, MAP_WIDTH - 200), Phaser.Math.Between(200, MAP_HEIGHT - 200), `Bot ${i + 1}`, false);
+                        const botId = `bot_${Date.now()}_${i}`;
+                        const botX = Phaser.Math.Between(200, MAP_WIDTH - 200);
+                        const botY = Phaser.Math.Between(200, MAP_HEIGHT - 200);
+                        const bot = new Player(this, botX, botY, `Bot ${i + 1}`, false);
                         bot.playerId = botId;
                         this.playersGroup.add(bot);
+                        this.gameRef.child('players').child(botId).set({x: botX, y: botY, rotation: 0, health: 100, armor: 0, username: bot.playerName});
                     }
                 }
 
@@ -285,6 +501,9 @@
                     } else {
                         this.uiScene.updateKillFeed(`${deadPlayer.playerName} was eliminated`);
                     }
+                    if (this.isHost) {
+                        this.gameRef.child('players').child(deadPlayer.playerId).remove();
+                    }
                     this.checkWinCondition();
                 });
             }
@@ -296,11 +515,10 @@
                     const playerId = snapshot.key;
                     if (playerId === this.playerId || !data) return;
 
-                    const p = this.allPlayers.find(player => player.playerId === playerId);
+                    let p = this.allPlayers.find(player => player.playerId === playerId);
                     if (p) {
                         p.setPosition(data.x, data.y);
                         p.setRotation(data.rotation);
-                        // Avoid overriding local health updates with delayed server data
                         if (p.health > data.health) p.health = data.health;
                         if (p.armor > data.armor) p.armor = data.armor;
                     }
@@ -308,9 +526,10 @@
 
                 playersRef.on('child_removed', (snapshot) => {
                     const playerId = snapshot.key;
-                    const p = this.allPlayers.find(player => player.playerId === playerId);
+                    let p = this.allPlayers.find(player => player.playerId === playerId);
                     if (p) {
                          p.die(null);
+                         this.allPlayers = this.playersGroup.getChildren().filter(pl => pl.active);
                     }
                 });
             }
@@ -319,18 +538,15 @@
                 const zoneRef = this.gameRef.child('safeZone');
                 zoneRef.on('value', (snapshot) => {
                     const zoneData = snapshot.val();
-                    if (zoneData && this.safeZone) {
-                        // Use a tween for smooth transition on client side as well
+                    if (zoneData && this.safeZone && !this.isHost) {
                         this.tweens.add({
                             targets: this.safeZone,
                             radius: zoneData.radius,
                             x: zoneData.x,
                             y: zoneData.y,
-                            duration: 5000, // Match the host's shrink duration
+                            duration: 5000,
                             ease: 'Sine.easeInOut',
-                            onUpdate: () => {
-                                this.updateZoneGraphics();
-                            }
+                            onUpdate: () => { this.updateZoneGraphics(); }
                         });
                     }
                 });
@@ -338,6 +554,7 @@
             
             update(time, delta) {
                 if (this.isGameOver) return;
+                if (!this.player) return;
 
                 if (this.player.active) {
                     this.player.handleInput(this.keys);
@@ -354,7 +571,6 @@
                     }
                 }
                 
-                // Host is responsible for updating bots and syncing their state
                 if (this.isHost) {
                     this.playersGroup.getChildren().forEach(p => {
                         if (!p.isPlayerControlled && p.active) {
@@ -417,39 +633,56 @@
                 const newX = this.safeZone.x + Math.cos(angle) * distance;
                 const newY = this.safeZone.y + Math.sin(angle) * distance;
                 
-                // The host tweens locally, and sends final data to Firebase for others
                 const finalZoneState = {
                     radius: newRadius,
                     x: Phaser.Math.Clamp(newX, newRadius, MAP_WIDTH - newRadius),
                     y: Phaser.Math.Clamp(newY, newRadius, MAP_HEIGHT - newRadius),
                 };
-                
-                this.gameRef.child('safeZone').set(finalZoneState);
+
+                this.tweens.add({
+                    targets: this.safeZone,
+                    radius: finalZoneState.radius,
+                    x: finalZoneState.x,
+                    y: finalZoneState.y,
+                    duration: 5000,
+                    ease: 'Sine.easeInOut',
+                    onUpdate: () => { this.updateZoneGraphics(); },
+                    onComplete: () => { this.gameRef.child('safeZone').set(finalZoneState); }
+                });
                 this.uiScene.updateZoneTimer(30);
             }
 
             checkWinCondition() {
-                const alivePlayers = this.playersGroup.getChildren().filter(p => p.active);
-                if (alivePlayers.length <= 1) {
-                    this.isGameOver = true;
-                    if(this.zoneTimer) this.zoneTimer.paused = true;
-                    let winnerName = (alivePlayers.length === 1) ? alivePlayers[0].playerName : "No one";
-                    const winnerText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, `WINNER WINNER!\n${winnerName} is the champion!`, {
-                        fontSize: '64px', fill: '#fff', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.5)'
-                    }).setOrigin(0.5).setScrollFactor(0);
+                const alivePlayers = this.playersGroup.getChildren().filter(p => p.active && p.isPlayerControlled);
+                const aliveBots = this.playersGroup.getChildren().filter(p => p.active && !p.isPlayerControlled);
 
-                    if (this.isHost) {
-                       this.time.delayedCall(10000, () => this.gameRef.remove()); // Host cleans up the game room
-                    }
-                    this.time.delayedCall(10000, () => {
-                        this.scene.start('LobbyScene');
-                        this.uiScene.scene.stop();
-                    });
+                if (alivePlayers.length === 1 && aliveBots.length === 0) {
+                     this.endGame(alivePlayers[0].playerName);
+                } else if (alivePlayers.length === 0) {
+                     this.endGame(aliveBots.length > 0 ? aliveBots[0].playerName : "No one");
                 }
+            }
+            
+            endGame(winnerName) {
+                if (this.isGameOver) return;
+                this.isGameOver = true;
+                if(this.zoneTimer) this.zoneTimer.destroy();
+                
+                const winnerText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, `WINNER WINNER!\n${winnerName} is the champion!`, {
+                    fontSize: '64px', fill: '#fff', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.5)'
+                }).setOrigin(0.5).setScrollFactor(0);
+
+                if (this.isHost) {
+                   this.time.delayedCall(10000, () => this.gameRef.remove());
+                }
+                this.time.delayedCall(10000, () => {
+                    this.scene.start('LobbyScene');
+                    this.uiScene.scene.stop();
+                });
             }
         }
 
-        // --- UI SCENE (No major changes needed) ---
+        // --- UI SCENE (UNCHANGED) ---
         class UIScene extends Phaser.Scene {
              constructor() {
                 super({ key: 'UIScene' });
@@ -515,13 +748,13 @@
             }
         }
         
-        // --- GAME LOGIC CLASSES ---
+        // --- GAME LOGIC CLASSES (UNCHANGED) ---
         class Player extends Phaser.Physics.Arcade.Sprite {
             constructor(scene, x, y, name, isPlayerControlled) {
                 super(scene, x, y);
                 this.playerName = name;
                 this.isPlayerControlled = isPlayerControlled;
-                this.playerId = null; // Will be set in GameScene
+                this.playerId = null; 
 
                 const color = isPlayerControlled ? 0x00ff00 : (name.startsWith('Bot') ? 0xcccccc : 0xff0000);
                 const size = 32;
@@ -600,10 +833,11 @@
                 this.weapon.ammo = weaponData.ammo;
             }
             die(killer) {
-                if (!this.active) return; // Prevent multiple death calls
+                if (!this.active) return;
                 this.setActive(false).setVisible(false);
                 this.nameLabel.destroy();
                 this.body.setEnable(false);
+                if (this.aiUpdateTimer) this.aiUpdateTimer.destroy();
                 this.scene.events.emit('playerDied', this, killer);
             }
             updateAI() {
@@ -672,7 +906,7 @@
             }
         }
 
-        // --- PHASER CONFIG & INITIALIZATION (MODIFIED) ---
+        // --- PHASER CONFIG & INITIALIZATION (UNCHANGED) ---
         const config = {
             type: Phaser.AUTO,
             scale: {
@@ -686,7 +920,6 @@
                 default: 'arcade',
                 arcade: { gravity: { y: 0 } }
             },
-            // Start with LobbyScene
             scene: [LobbyScene, GameScene, UIScene]
         };
 
