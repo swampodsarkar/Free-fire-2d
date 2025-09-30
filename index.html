@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Phaser 3 Battle Royale - Online</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+        }
+        #game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+    <script>
+        // --- FIREBASE INITIALIZATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAhSjh1VxQFrzslIwOZ1yOxLYuNT2Le_sg",
+            authDomain: "fram-and-go.firebaseapp.com",
+            databaseURL: "https://fram-and-go-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "fram-and-go",
+            storageBucket: "fram-and-go.appspot.com",
+            messagingSenderId: "781295119002",
+            appId: "1:781295119002:web:3d84890a0bb85e5d1c0d23",
+            measurementId: "G-H30RNBNE6X"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        // --- LOBBY SCENE (NEW) ---
+        class LobbyScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'LobbyScene' });
+                this.playerId = null;
+                this.matchmakingRef = null;
+            }
+
+            create() {
+                // Simple UI for username input
+                const nameInput = document.createElement('input');
+                nameInput.type = 'text';
+                nameInput.placeholder = 'Enter your name';
+                nameInput.style.position = 'absolute';
+                nameInput.style.top = '45%';
+                nameInput.style.left = '50%';
+                nameInput.style.transform = 'translate(-50%, -50%)';
+                nameInput.style.fontSize = '24px';
+                nameInput.style.padding = '10px';
+                nameInput.style.width = '300px';
+                nameInput.style.border = '2px solid #fff';
+                nameInput.style.backgroundColor = '#333';
+                nameInput.style.color = '#fff';
+                document.body.appendChild(nameInput);
+
+                const startButton = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY + 70, 'Start Matchmaking', {
+                    fontSize: '32px', fill: '#0f0', backgroundColor: '#333', padding: { x: 20, y: 10 }
+                }).setOrigin(0.5).setInteractive();
+
+                const statusText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY + 140, '', {
+                    fontSize: '20px', fill: '#fff'
+                }).setOrigin(0.5);
+
+                startButton.on('pointerdown', () => {
+                    const username = nameInput.value.trim();
+                    if (!username) {
+                        alert('Please enter a username!');
+                        return;
+                    }
+
+                    // Clean up UI
+                    nameInput.style.display = 'none';
+                    startButton.destroy();
+                    statusText.setText('Waiting for other players...');
+
+                    // Generate a unique ID for the player
+                    this.playerId = 'player_' + Math.random().toString(36).substr(2, 9);
+
+                    // Add player to the matchmaking queue in Firebase
+                    this.matchmakingRef = database.ref('matchmaking');
+                    const playerRef = this.matchmakingRef.child(this.playerId);
+                    playerRef.set({ username: username, joinedAt: firebase.database.ServerValue.TIMESTAMP });
+                    playerRef.onDisconnect().remove(); // Clean up if player disconnects
+
+                    // Listen for changes in the matchmaking queue
+                    this.matchmakingRef.on('value', (snapshot) => {
+                        const players = snapshot.val();
+                        const playerCount = players ? Object.keys(players).length : 0;
+
+                        if (playerCount >= 2) {
+                            this.matchmakingRef.off('value'); // Stop listening
+                            this.startGame(players);
+                        }
+                    });
+                });
+            }
+
+            startGame(players) {
+                // Sort players by join time to consistently determine the host
+                const playerEntries = Object.entries(players);
+                playerEntries.sort((a, b) => a[1].joinedAt - b[1].joinedAt);
+                
+                const sortedPlayers = Object.fromEntries(playerEntries);
+                const playerIds = Object.keys(sortedPlayers);
+
+                const hostId = playerIds[0];
+                const isHost = this.playerId === hostId;
+
+                // Create a unique game ID
+                const gameId = 'game_' + Math.random().toString(36).substr(2, 9);
+                
+                // Host cleans up the matchmaking queue
+                if (isHost) {
+                    this.matchmakingRef.remove();
+                }
+
+                // All players switch to the GameScene
+                this.scene.start('GameScene', {
+                    gameId: gameId,
+                    playerId: this.playerId,
+                    isHost: isHost,
+                    initialPlayers: sortedPlayers
+                });
+            }
+        }
+
+        // --- GAME SCENE (MODIFIED FOR MULTIPLAYER) ---
+        class GameScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'GameScene' });
+                this.player = null;
+                this.bullets = null;
+                this.loot = null;
+                this.keys = null;
+                this.safeZone = null;
+                this.zoneGraphics = null;
+                this.zoneTimer = null;
+                this.isGameOver = false;
+
+                // New properties for multiplayer
+                this.gameId = null;
+                this.playerId = null;
+                this.isHost = false;
+                this.playerRef = null;
+                this.gameRef = null;
+                this.remotePlayers = {}; // To store other players' sprites
+            }
+
+            init(data) {
+                this.gameId = data.gameId;
+                this.playerId = data.playerId;
+                this.isHost = data.isHost;
+                this.initialPlayers = data.initialPlayers;
+            }
+
+            preload() {
+                // No external assets to load
+            }
+
+            create() {
+                this.isGameOver = false;
+                this.gameRef = database.ref(`games/${this.gameId}`);
+                this.remotePlayers = {};
+                const MAP_WIDTH = 3200;
+                const MAP_HEIGHT = 3200;
+
+                this.physics.world.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
+                this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+                const gridGraphics = this.add.graphics({ lineStyle: { width: 1, color: 0x222222 } });
+                for (let i = 0; i < MAP_WIDTH; i += 50) {
+                    gridGraphics.moveTo(i, 0).lineTo(i, MAP_HEIGHT);
+                    gridGraphics.moveTo(0, i).lineTo(MAP_WIDTH, i);
+                }
+                gridGraphics.strokePath();
+
+                const obstacles = this.physics.add.staticGroup();
+                for (let i = 0; i < 20; i++) {
+                    const obstacle = this.add.rectangle(Phaser.Math.Between(100, MAP_WIDTH - 100), Phaser.Math.Between(100, MAP_HEIGHT - 100), Phaser.Math.Between(50, 200), Phaser.Math.Between(50, 200), 0x555555);
+                    obstacles.add(obstacle);
+                }
+                
+                this.playersGroup = this.physics.add.group({ classType: Player, runChildUpdate: true });
+                this.bullets = this.physics.add.group({ classType: Bullet, runChildUpdate: true });
+                this.loot = this.physics.add.group();
+
+                // Create players from lobby data
+                Object.keys(this.initialPlayers).forEach(id => {
+                    const pData = this.initialPlayers[id];
+                    const isLocalPlayer = (id === this.playerId);
+                    const player = new Player(this, Phaser.Math.Between(200, MAP_WIDTH - 200), Phaser.Math.Between(200, MAP_HEIGHT - 200), pData.username, isLocalPlayer);
+                    player.playerId = id;
+                    this.playersGroup.add(player);
+
+                    if (isLocalPlayer) {
+                        this.player = player;
+                        this.playerRef = this.gameRef.child('players').child(this.playerId);
+                        this.playerRef.onDisconnect().remove();
+                    } else {
+                        this.remotePlayers[id] = player;
+                    }
+                });
+
+                // Host creates and manages bots
+                if (this.isHost) {
+                    const realPlayerCount = Object.keys(this.initialPlayers).length;
+                    const botsToCreate = Math.max(0, 10 - realPlayerCount);
+                    for (let i = 0; i < botsToCreate; i++) {
+                        const botId = `bot_${i}`;
+                        const bot = new Player(this, Phaser.Math.Between(200, MAP_WIDTH - 200), Phaser.Math.Between(200, MAP_HEIGHT - 200), `Bot ${i + 1}`, false);
+                        bot.playerId = botId;
+                        this.playersGroup.add(bot);
+                    }
+                }
+
+                this.allPlayers = this.playersGroup.getChildren();
+                this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+
+                this.allPlayers.forEach(p => {
+                    p.body.setAllowGravity(true);
+                    p.body.setGravityY(50);
+                    this.tweens.add({ targets: p.body.velocity, y: 50, duration: 2000, onComplete: () => { p.body.setAllowGravity(false); p.body.setGravityY(0); p.land(); } });
+                });
+
+                this.keys = this.input.keyboard.addKeys('W,A,S,D,R,E');
+                this.input.on('pointerdown', (pointer) => {
+                    if (this.player && this.player.active && !this.isGameOver) this.player.shoot(pointer);
+                }, this);
+
+                if (this.isHost) {
+                    this.time.addEvent({ delay: 10000, callback: this.spawnLoot, callbackScope: this, loop: true });
+                    this.spawnLoot();
+                }
+
+                this.safeZone = new Phaser.Geom.Circle(MAP_WIDTH / 2, MAP_HEIGHT / 2, MAP_WIDTH / 2.1);
+                this.zoneGraphics = this.add.graphics({ lineStyle: { width: 10, color: 0x00aaff } });
+                this.zoneDamageGraphics = this.add.graphics({ fillStyle: { color: 0xff0000, alpha: 0.2 } }).fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+                const zoneMaskGraphics = this.make.graphics();
+                const mask = new Phaser.Display.Masks.GeometryMask(this, zoneMaskGraphics);
+                mask.setInvertAlpha(true);
+                this.zoneDamageGraphics.setMask(mask);
+                this.zoneMaskGraphics = zoneMaskGraphics;
+                this.updateZoneGraphics();
+
+                if (this.isHost) {
+                    this.gameRef.child('safeZone').set({ x: this.safeZone.x, y: this.safeZone.y, radius: this.safeZone.radius });
+                    this.zoneTimer = this.time.addEvent({ delay: 30000, callback: this.shrinkZone, callbackScope: this, loop: true });
+                }
+
+                this.listenForPlayerUpdates();
+                this.listenForSafeZoneUpdates();
+
+                this.physics.add.collider(this.playersGroup, this.playersGroup);
+                this.physics.add.collider(this.playersGroup, obstacles);
+                this.physics.add.collider(this.bullets, obstacles, (bullet) => bullet.destroy());
+                this.physics.add.overlap(this.bullets, this.playersGroup, this.handleBulletPlayerCollision, null, this);
+                this.physics.add.overlap(this.playersGroup, this.loot, this.handlePlayerLootCollision, null, this);
+
+                this.scene.launch('UIScene', { player: this.player });
+                this.uiScene = this.scene.get('UIScene');
+
+                this.events.on('playerDied', (deadPlayer, killer) => {
+                    if (killer && killer !== deadPlayer) {
+                        killer.kills++;
+                        this.uiScene.updateKillFeed(`${killer.playerName} eliminated ${deadPlayer.playerName}`);
+                    } else {
+                        this.uiScene.updateKillFeed(`${deadPlayer.playerName} was eliminated`);
+                    }
+                    this.checkWinCondition();
+                });
+            }
+            
+            listenForPlayerUpdates() {
+                const playersRef = this.gameRef.child('players');
+                playersRef.on('child_changed', (snapshot) => {
+                    const data = snapshot.val();
+                    const playerId = snapshot.key;
+                    if (playerId === this.playerId || !data) return;
+
+                    const p = this.allPlayers.find(player => player.playerId === playerId);
+                    if (p) {
+                        p.setPosition(data.x, data.y);
+                        p.setRotation(data.rotation);
+                        // Avoid overriding local health updates with delayed server data
+                        if (p.health > data.health) p.health = data.health;
+                        if (p.armor > data.armor) p.armor = data.armor;
+                    }
+                });
+
+                playersRef.on('child_removed', (snapshot) => {
+                    const playerId = snapshot.key;
+                    const p = this.allPlayers.find(player => player.playerId === playerId);
+                    if (p) {
+                         p.die(null);
+                    }
+                });
+            }
+
+            listenForSafeZoneUpdates() {
+                const zoneRef = this.gameRef.child('safeZone');
+                zoneRef.on('value', (snapshot) => {
+                    const zoneData = snapshot.val();
+                    if (zoneData && this.safeZone) {
+                        // Use a tween for smooth transition on client side as well
+                        this.tweens.add({
+                            targets: this.safeZone,
+                            radius: zoneData.radius,
+                            x: zoneData.x,
+                            y: zoneData.y,
+                            duration: 5000, // Match the host's shrink duration
+                            ease: 'Sine.easeInOut',
+                            onUpdate: () => {
+                                this.updateZoneGraphics();
+                            }
+                        });
+                    }
+                });
+            }
+            
+            update(time, delta) {
+                if (this.isGameOver) return;
+
+                if (this.player.active) {
+                    this.player.handleInput(this.keys);
+                    const now = Date.now();
+                    if (!this.lastUpdateTime || now - this.lastUpdateTime > 50) { // ~20fps
+                        this.playerRef.update({
+                            x: this.player.x,
+                            y: this.player.y,
+                            rotation: this.player.rotation,
+                            health: this.player.health,
+                            armor: this.player.armor
+                        });
+                        this.lastUpdateTime = now;
+                    }
+                }
+                
+                // Host is responsible for updating bots and syncing their state
+                if (this.isHost) {
+                    this.playersGroup.getChildren().forEach(p => {
+                        if (!p.isPlayerControlled && p.active) {
+                            this.gameRef.child('players').child(p.playerId).update({
+                                x: p.x, y: p.y, rotation: p.rotation, health: p.health, armor: p.armor
+                            });
+                        }
+                    });
+                }
+                
+                this.playersGroup.getChildren().forEach(p => {
+                    if (p.active && !Phaser.Geom.Circle.Contains(this.safeZone, p.x, p.y)) {
+                        p.takeDamage(0.1, null);
+                    }
+                });
+                
+                this.uiScene.updatePlayers(this.allPlayers);
+                this.uiScene.updateSafeZone(this.safeZone);
+            }
+
+            handleBulletPlayerCollision(bullet, player) {
+                if (bullet.owner !== player && player.active) {
+                    player.takeDamage(bullet.damage, bullet.owner);
+                    bullet.destroy();
+                }
+            }
+            
+            handlePlayerLootCollision(player, lootItem) {
+                 if (!player.active) return;
+                const shouldPickup = player.isPlayerControlled ? this.keys.E.isDown : true;
+                if (shouldPickup) {
+                    lootItem.pickup(player);
+                }
+            }
+
+            spawnLoot() {
+                const lootTypes = [{ type: 'medkit', color: 0x00ff00, value: 50 }, { type: 'armor', color: 0x0000ff, value: 50 }, { type: 'pistol', color: 0x888888, ammo: 12 }, { type: 'rifle', color: 0xffff00, ammo: 30 }];
+                const randomLoot = Phaser.Math.RND.pick(lootTypes);
+                const x = Phaser.Math.Between(50, this.physics.world.bounds.width - 50);
+                const y = Phaser.Math.Between(50, this.physics.world.bounds.height - 50);
+                const lootItem = new Loot(this, x, y, randomLoot.type, randomLoot.color, randomLoot);
+                this.loot.add(lootItem);
+            }
+            
+            updateZoneGraphics() {
+                this.zoneGraphics.clear().strokeCircleShape(this.safeZone);
+                this.zoneMaskGraphics.clear().fillStyle(0xffffff).fillCircleShape(this.safeZone);
+            }
+
+            shrinkZone() {
+                if (!this.isHost) return;
+                const MAP_WIDTH = this.physics.world.bounds.width;
+                const MAP_HEIGHT = this.physics.world.bounds.height;
+                const minRadius = 100;
+                if (this.safeZone.radius <= minRadius) return;
+                let newRadius = this.safeZone.radius * 0.7;
+                if (newRadius < minRadius) newRadius = minRadius;
+                const distance = this.safeZone.radius - newRadius;
+                const angle = Phaser.Math.FloatBetween(0, 2 * Math.PI);
+                const newX = this.safeZone.x + Math.cos(angle) * distance;
+                const newY = this.safeZone.y + Math.sin(angle) * distance;
+                
+                // The host tweens locally, and sends final data to Firebase for others
+                const finalZoneState = {
+                    radius: newRadius,
+                    x: Phaser.Math.Clamp(newX, newRadius, MAP_WIDTH - newRadius),
+                    y: Phaser.Math.Clamp(newY, newRadius, MAP_HEIGHT - newRadius),
+                };
+                
+                this.gameRef.child('safeZone').set(finalZoneState);
+                this.uiScene.updateZoneTimer(30);
+            }
+
+            checkWinCondition() {
+                const alivePlayers = this.playersGroup.getChildren().filter(p => p.active);
+                if (alivePlayers.length <= 1) {
+                    this.isGameOver = true;
+                    if(this.zoneTimer) this.zoneTimer.paused = true;
+                    let winnerName = (alivePlayers.length === 1) ? alivePlayers[0].playerName : "No one";
+                    const winnerText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, `WINNER WINNER!\n${winnerName} is the champion!`, {
+                        fontSize: '64px', fill: '#fff', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.5)'
+                    }).setOrigin(0.5).setScrollFactor(0);
+
+                    if (this.isHost) {
+                       this.time.delayedCall(10000, () => this.gameRef.remove()); // Host cleans up the game room
+                    }
+                    this.time.delayedCall(10000, () => {
+                        this.scene.start('LobbyScene');
+                        this.uiScene.scene.stop();
+                    });
+                }
+            }
+        }
+
+        // --- UI SCENE (No major changes needed) ---
+        class UIScene extends Phaser.Scene {
+             constructor() {
+                super({ key: 'UIScene' });
+                this.gameScene = null;
+                this.player = null;
+                this.isMobile = false;
+             }
+            init(data) {
+                this.player = data.player;
+                this.isMobile = !this.sys.game.device.os.desktop;
+            }
+            create() {
+                this.gameScene = this.scene.get('GameScene');
+                this.add.text(10, 10, 'HP', { fontSize: '16px', fill: '#fff' });
+                this.healthBar = this.add.graphics();
+                this.add.text(10, 30, 'Armor', { fontSize: '16px', fill: '#fff' });
+                this.armorBar = this.add.graphics();
+                this.ammoText = this.add.text(10, 50, '', { fontSize: '16px', fill: '#fff' });
+                this.killText = this.add.text(10, 70, 'Kills: 0', { fontSize: '16px', fill: '#fff' });
+                this.zoneTimerText = this.add.text(this.cameras.main.width / 2, 10, '', { fontSize: '20px', fill: '#00aaff' }).setOrigin(0.5, 0);
+                this.updateZoneTimer(30);
+                this.killFeed = [];
+                this.killFeedText = this.add.text(this.cameras.main.width - 10, 10, '', { fontSize: '14px', fill: '#ffdddd', align: 'right' }).setOrigin(1, 0);
+                const minimapSize = 150;
+                const minimapX = this.cameras.main.width - minimapSize - 10;
+                const minimapY = this.cameras.main.height - minimapSize - 10;
+                this.minimapBg = this.add.rectangle(minimapX, minimapY, minimapSize, minimapSize, 0x000000, 0.5).setOrigin(0);
+                this.minimapGraphics = this.add.graphics().setPosition(minimapX, minimapY);
+                this.minimapZoneGraphics = this.add.graphics().setPosition(minimapX, minimapY);
+                this.mapScale = minimapSize / this.gameScene.physics.world.bounds.width;
+                if (this.isMobile) this.createMobileControls();
+            }
+            createMobileControls() { /* ... unchanged ... */ }
+            updateZoneTimer(seconds) {
+                this.remainingTime = seconds;
+                if (this.zoneCountdown) this.zoneCountdown.destroy();
+                this.zoneCountdown = this.time.addEvent({ delay: 1000, callback: () => { this.remainingTime--; if (this.remainingTime < 0) this.remainingTime = 0; }, loop: true });
+            }
+            update(time, delta) {
+                if (this.player && this.player.active) {
+                    this.healthBar.clear().fillStyle(0x00ff00, 1).fillRect(10, 10, (this.player.health / 100) * 150, 15);
+                    this.armorBar.clear().fillStyle(0x0000ff, 1).fillRect(10, 30, (this.player.armor / 100) * 150, 15);
+                    this.ammoText.setText(`Ammo: ${this.player.weapon.ammo}/${this.player.weapon.clipSize}`);
+                    this.killText.setText(`Kills: ${this.player.kills}`);
+                }
+                this.zoneTimerText.setText(`Zone shrinks in: ${this.remainingTime}`);
+                this.killFeedText.setText(this.killFeed.join('\n'));
+            }
+            updateKillFeed(message) {
+                this.killFeed.unshift(message);
+                if (this.killFeed.length > 5) this.killFeed.pop();
+            }
+            updatePlayers(players) {
+                this.minimapGraphics.clear();
+                players.forEach(p => {
+                    const color = p.isPlayerControlled ? 0x00ff00 : (p.playerName.startsWith('Bot') ? 0xcccccc : 0xff0000);
+                    const size = p.isPlayerControlled ? 4 : 3;
+                    this.minimapGraphics.fillStyle(color, 1).fillCircle(p.x * this.mapScale, p.y * this.mapScale, size);
+                });
+            }
+            updateSafeZone(zone) {
+                this.minimapZoneGraphics.clear().lineStyle(1, 0x00aaff, 1).strokeCircle(zone.x * this.mapScale, zone.y * this.mapScale, zone.radius * this.mapScale);
+            }
+        }
+        
+        // --- GAME LOGIC CLASSES ---
+        class Player extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y, name, isPlayerControlled) {
+                super(scene, x, y);
+                this.playerName = name;
+                this.isPlayerControlled = isPlayerControlled;
+                this.playerId = null; // Will be set in GameScene
+
+                const color = isPlayerControlled ? 0x00ff00 : (name.startsWith('Bot') ? 0xcccccc : 0xff0000);
+                const size = 32;
+                const textureKey = `player_${color}`;
+                if (!scene.textures.exists(textureKey)) {
+                    const g = scene.make.graphics().fillStyle(color).fillRect(0, 0, size, size).lineStyle(2, 0xffffff).strokeRect(0, 0, size, size);
+                    g.generateTexture(textureKey, size, size).destroy();
+                }
+                this.setTexture(textureKey);
+                
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+
+                this.setCollideWorldBounds(true).setDrag(1000).body.setCircle(size/2);
+                this.nameLabel = scene.add.text(x, y - 25, name, { fontSize: '12px', fill: '#fff', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5);
+
+                this.health = 100; this.armor = 0; this.speed = 250; this.kills = 0; this.isLanded = false;
+                this.weapon = { type: 'pistol', damage: 10, fireRate: 400, clipSize: 12, ammo: 12, reloadTime: 1500 };
+                this.lastFired = 0; this.isReloading = false;
+                
+                if (!isPlayerControlled && name.startsWith('Bot')) {
+                    this.aiState = 'WANDERING';
+                    this.aiTarget = null;
+                    this.aiTargetPoint = new Phaser.Math.Vector2();
+                    this.aiUpdateTimer = scene.time.addEvent({ delay: Phaser.Math.Between(500, 1500), callback: this.updateAI, callbackScope: this, loop: true });
+                }
+                this.mobileMoveDir = new Phaser.Math.Vector2(0, 0);
+            }
+            land() { this.isLanded = true; this.body.setVelocity(0); }
+            handleInput(keys) {
+                if (!this.active || !this.isLanded) return;
+                let moveX = 0, moveY = 0;
+                if (this.scene.uiScene.isMobile) {
+                    moveX = this.mobileMoveDir.x; moveY = this.mobileMoveDir.y;
+                } else {
+                    if (keys.A.isDown) moveX = -1; else if (keys.D.isDown) moveX = 1;
+                    if (keys.W.isDown) moveY = -1; else if (keys.S.isDown) moveY = 1;
+                }
+                const moveVec = new Phaser.Math.Vector2(moveX, moveY).normalize().scale(this.speed);
+                this.setVelocity(moveVec.x, moveVec.y);
+                const pointer = this.scene.input.activePointer;
+                const worldPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+                this.rotation = Phaser.Math.Angle.Between(this.x, this.y, worldPoint.x, worldPoint.y);
+                if (keys.R.isDown && !this.isReloading) this.reload();
+            }
+            shoot(target) {
+                if (this.scene.time.now > this.lastFired && this.weapon.ammo > 0 && !this.isReloading && this.isLanded) {
+                    this.weapon.ammo--;
+                    this.lastFired = this.scene.time.now + this.weapon.fireRate;
+                    const worldPoint = this.isPlayerControlled ? this.scene.cameras.main.getWorldPoint(target.x, target.y) : target;
+                    const angle = Phaser.Math.Angle.Between(this.x, this.y, worldPoint.x, worldPoint.y);
+                    const bullet = this.scene.bullets.get(this.x, this.y);
+                    if (bullet) bullet.fire(this, angle, this.weapon.damage);
+                } else if (this.weapon.ammo <= 0) {
+                    this.reload();
+                }
+            }
+            reload() {
+                if (this.isReloading) return;
+                this.isReloading = true;
+                this.scene.time.delayedCall(this.weapon.reloadTime, () => { this.weapon.ammo = this.weapon.clipSize; this.isReloading = false; });
+            }
+            takeDamage(amount, attacker) {
+                if (!this.active) return;
+                let damageLeft = amount;
+                if (this.armor > 0) { const armorDamage = Math.min(this.armor, damageLeft); this.armor -= armorDamage; damageLeft -= armorDamage; }
+                this.health -= damageLeft;
+                if (this.health <= 0) { this.health = 0; this.die(attacker); }
+            }
+            heal(amount) { this.health = Math.min(100, this.health + amount); }
+            addArmor(amount) { this.armor = Math.min(100, this.armor + amount); }
+            equipWeapon(weaponData) {
+                this.weapon = { ...this.weapon, ...weaponData };
+                if (weaponData.type === 'rifle') { this.weapon.damage = 20; this.weapon.fireRate = 150; this.weapon.clipSize = 30; this.weapon.reloadTime = 2000; }
+                else { this.weapon.damage = 10; this.weapon.fireRate = 400; this.weapon.clipSize = 12; this.weapon.reloadTime = 1500; }
+                this.weapon.ammo = weaponData.ammo;
+            }
+            die(killer) {
+                if (!this.active) return; // Prevent multiple death calls
+                this.setActive(false).setVisible(false);
+                this.nameLabel.destroy();
+                this.body.setEnable(false);
+                this.scene.events.emit('playerDied', this, killer);
+            }
+            updateAI() {
+                if (!this.active || !this.isLanded || this.scene.isGameOver) { this.setVelocity(0); return; };
+                const visibleEnemies = this.scene.allPlayers.filter(p => p !== this && p.active && Phaser.Math.Distance.Between(this.x, this.y, p.x, p.y) < 600);
+                const nearbyLoot = this.scene.loot.getChildren().filter(l => l.active && Phaser.Math.Distance.Between(this.x, this.y, l.x, l.y) < 500);
+                if ( (this.health < 50 || this.weapon.ammo < 5) && nearbyLoot.length > 0 ) { this.aiState = 'LOOTING'; this.aiTarget = nearbyLoot[0]; }
+                else if (visibleEnemies.length > 0) { this.aiState = 'ATTACKING'; this.aiTarget = visibleEnemies[0]; }
+                else { this.aiState = 'WANDERING'; this.aiTarget = null; }
+                switch (this.aiState) {
+                    case 'ATTACKING':
+                        this.rotation = Phaser.Math.Angle.Between(this.x, this.y, this.aiTarget.x, this.aiTarget.y);
+                        this.shoot({ x: this.aiTarget.x, y: this.aiTarget.y });
+                        if (Phaser.Math.Distance.Between(this.x, this.y, this.aiTarget.x, this.aiTarget.y) > 200) this.scene.physics.moveToObject(this, this.aiTarget, this.speed * 0.8);
+                        else this.setVelocity(0);
+                        break;
+                    case 'LOOTING': this.scene.physics.moveToObject(this, this.aiTarget, this.speed); break;
+                    case 'WANDERING':
+                        if (!this.aiTargetPoint || Phaser.Math.Distance.Between(this.x, this.y, this.aiTargetPoint.x, this.aiTargetPoint.y) < 50) this.setNewWanderPoint();
+                        this.scene.physics.moveTo(this, this.aiTargetPoint.x, this.aiTargetPoint.y, this.speed * 0.5);
+                        this.rotation = Phaser.Math.Angle.Between(this.x, this.y, this.aiTargetPoint.x, this.aiTargetPoint.y);
+                        break;
+                }
+            }
+            setNewWanderPoint() { this.aiTargetPoint = Phaser.Geom.Circle.Random(this.scene.safeZone); }
+            preUpdate(time, delta) {
+                super.preUpdate(time, delta);
+                if (this.active) this.nameLabel.setPosition(this.x, this.y - 25);
+            }
+        }
+        
+        class Bullet extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y) {
+                super(scene, x, y);
+                const size = 6; const textureKey = 'bullet';
+                if (!scene.textures.exists(textureKey)) {
+                    const g = scene.make.graphics().fillStyle(0xffff00).fillCircle(size/2, size/2, size/2);
+                    g.generateTexture(textureKey, size, size).destroy();
+                }
+                this.setTexture(textureKey);
+                scene.add.existing(this); scene.physics.add.existing(this);
+                this.speed = 1000; this.lifespan = 2000; this.damage = 0; this.owner = null;
+            }
+            fire(owner, angle, damage) {
+                this.owner = owner; this.damage = damage; this.lifespan = this.scene.time.now + 2000;
+                this.setActive(true).setVisible(true).setPosition(owner.x, owner.y).setRotation(angle);
+                this.scene.physics.velocityFromRotation(angle, this.speed, this.body.velocity);
+                this.body.setCircle(3);
+            }
+            update(time, delta) { if (time > this.lifespan) this.destroy(); }
+        }
+        
+        class Loot extends Phaser.GameObjects.Rectangle {
+            constructor(scene, x, y, type, color, data) {
+                super(scene, x, y, 20, 20, color);
+                this.type = type; this.data = data;
+                scene.add.existing(this); scene.physics.add.existing(this); this.body.isSensor = true;
+            }
+            pickup(player) {
+                switch(this.type) {
+                    case 'medkit': player.heal(this.data.value); break;
+                    case 'armor': player.addArmor(this.data.value); break;
+                    case 'pistol': case 'rifle': player.equipWeapon(this.data); break;
+                }
+                this.destroy();
+            }
+        }
+
+        // --- PHASER CONFIG & INITIALIZATION (MODIFIED) ---
+        const config = {
+            type: Phaser.AUTO,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH,
+                width: window.innerWidth,
+                height: window.innerHeight,
+            },
+            parent: 'game-container',
+            physics: {
+                default: 'arcade',
+                arcade: { gravity: { y: 0 } }
+            },
+            // Start with LobbyScene
+            scene: [LobbyScene, GameScene, UIScene]
+        };
+
+        const game = new Phaser.Game(config);
+
+    </script>
+</body>
+</html>
